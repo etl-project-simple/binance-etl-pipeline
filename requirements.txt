@@ -1,0 +1,20 @@
+# Core ETL libs
+pyspark==3.5.1
+python-dotenv==1.0.1
+boto3==1.34.131
+botocore==1.34.131
+s3transfer==0.10.2
+psycopg2-binary==2.9.9
+
+# Khớp với constraints 2.9.3 (tránh conflict pyarrow)
+pyarrow==16.1.0
+
+# Nhiều provider yêu cầu pandas < 2.2
+pandas==2.1.4
+protobuf==4.25.3
+
+# Airflow providers – KHÔNG pin version, để constraints chọn bản tương thích
+apache-airflow-providers-apache-spark
+apache-airflow-providers-amazon
+
+websocket-client

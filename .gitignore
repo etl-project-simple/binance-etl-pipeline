@@ -1,0 +1,35 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Logs and outputs
+logs/
+output/
+*.log
+
+# Airflow
+airflow.cfg
+dags/__pycache__/
+
+# Docker
+*.pid
+
+# Environment & secrets
+.env
+.env.*
+!example.env

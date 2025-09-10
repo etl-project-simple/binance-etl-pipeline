@@ -1,0 +1,83 @@
+services:
+  # PostgreSQL to store Airflow metadata + Binance raw trades
+  postgres:
+    image: postgres:14
+    container_name: binance_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: binance_raw      
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # pgAdmin to manage PostgreSQL
+  binance_pgadmin:
+    image: dpage/pgadmin4
+    container_name: binance_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+
+  # Airflow Scheduler
+  binance-scheduler:
+    image: binance-airflow:latest
+    container_name: binance-scheduler
+    restart: always
+    command: scheduler
+    depends_on:
+      - postgres
+    environment:
+      - PYTHONPATH=/opt/airflow
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:123456@postgres:5432/airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${SECRET_KEY}
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./etl:/opt/airflow/etl
+      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ./stream.py:/opt/airflow/stream.py
+
+  # Airflow Webserver
+  binance-webserver:
+    image: binance-airflow:latest
+    container_name: binance-webserver
+    restart: always
+    command: webserver
+    ports:
+      - "8081:8080"
+    depends_on:
+      - binance-scheduler
+      - postgres
+    environment:
+      - PYTHONPATH=/opt/airflow
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:123456@postgres:5432/airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./etl:/opt/airflow/etl
+      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ./stream.py:/opt/airflow/stream.py
+  streamer:
+    build: .
+    container_name: binance-streamer
+    command: python /opt/airflow/stream.py
+    depends_on:
+      - postgres
+    environment:
+      - PYTHONPATH=/opt/airflow
+    volumes:
+      - .:/opt/airflow
+
+volumes:
+  postgres-data:
