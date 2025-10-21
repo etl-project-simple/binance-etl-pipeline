@@ -41,12 +41,18 @@ services:
       - PYTHONPATH=/opt/airflow
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:123456@postgres:5432/airflow
       - AIRFLOW__WEBSERVER__SECRET_KEY=${SECRET_KEY}
-
+      - AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_PORT=8793
+      - AIRFLOW__CORE__REMOTE_LOGGING=False
+      - AIRFLOW__CORE__BASE_LOG_FOLDER=/opt/airflow/logs
+    env_file:
+      - .env
     volumes:
       - ./dags:/opt/airflow/dags
       - ./etl:/opt/airflow/etl
       - ./requirements.txt:/opt/airflow/requirements.txt
       - ./stream.py:/opt/airflow/stream.py
+      - ./logs:/opt/airflow/logs          
+      - ./output:/opt/airflow/output 
 
   # Airflow Webserver
   binance-webserver:
@@ -63,11 +69,18 @@ services:
       - PYTHONPATH=/opt/airflow
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:123456@postgres:5432/airflow
       - AIRFLOW__WEBSERVER__SECRET_KEY=${SECRET_KEY}
+      - AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_PORT=8793
+      - AIRFLOW__CORE__REMOTE_LOGGING=False
+      - AIRFLOW__CORE__BASE_LOG_FOLDER=/opt/airflow/logs
+    env_file:
+      - .env
     volumes:
       - ./dags:/opt/airflow/dags
       - ./etl:/opt/airflow/etl
       - ./requirements.txt:/opt/airflow/requirements.txt
       - ./stream.py:/opt/airflow/stream.py
+      - ./logs:/opt/airflow/logs          
+      - ./output:/opt/airflow/output
   streamer:
     build: .
     container_name: binance-streamer
@@ -76,6 +89,8 @@ services:
       - postgres
     environment:
       - PYTHONPATH=/opt/airflow
+    env_file:
+      - .env
     volumes:
       - .:/opt/airflow
 

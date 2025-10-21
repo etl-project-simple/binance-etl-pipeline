@@ -156,3 +156,16 @@ See [`requirements.txt`](requirements.txt):
 - Near-real-time micro-batch Spark Structured Streaming.
 - Data quality checks before Redshift load.
 - Dashboard integration with Amazon QuickSight or Power BI.
+
+
+
+
+python - <<'EOF'
+import socket
+try:
+    host = "binance.714319916261.ap-southeast-2.redshift-serverless.amazonaws.com"
+    print("Resolving host:", host)
+    print("Result:", socket.gethostbyname(host))
+except Exception as e:
+    print("❌ DNS lookup failed:", e)
+EOF

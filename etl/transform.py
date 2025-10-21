@@ -1,40 +1,59 @@
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, year, month, dayofmonth, hour, minute, date_trunc, avg, min as _min, max as _max, sum as _sum
+from pyspark.sql import SparkSession
+from etl.logger import setup_logger
+from etl.transform_logic import TRANSFORM_FORM_DF_FUNCTIONS, STATIC_DIMENSIONS
+import os, sys, traceback
+from dotenv import load_dotenv
+from datetime import date   
 
-def create_dim_time(df: DataFrame) -> DataFrame:
-    """
-    Create a dimension table for time from the timestamp column.
-    """
-    return(
-        df.withColumn("datetime", col("trade_time"))
-            .withColumn("year", year(col("datetime")))
-            .withColumn("month", month(col("datetime")))
-            .withColumn("day", dayofmonth(col("datetime")))
-            .withColumn("hour", hour(col("datetime")))
-            .withColumn("minute", minute(col("datetime")))
-            .select("datetime", "year", "month", "day", "hour", "minute")
-            .dropDuplicates()  
-    )
+# Airflow/Docker: mount .env /opt/airflow/.env
+load_dotenv(os.getenv("ENV_FILE", "/opt/airflow/.env"))
+REFRESH_STATIC = os.getenv("REFRESH_STATIC", "False").lower() == "true"
 
-def create_fact_trades(df: DataFrame) -> DataFrame:
-    df_minute = df.withColumn("minute_trunc", date_trunc("minute", col("trade_time")))
-    return (
-        df_minute.groupBy("symbol", "minute_trunc")
-            .agg(
-                _min("price").alias("min_price"),
-                _max("price").alias("max_price"),
-                avg("price").alias("avg_price"),
-                _sum("quantity").alias("total_quantity"),
-                _sum(col("price") * col("quantity")).alias("total_trade_value")
-            )
-            .withColumnRenamed("minute_trunc", "trade_minute")
-    )
+def run_transform(target_date: date= None):
+    # 1.setup logging and spark session
+    log = setup_logger("transform_data")
+    log.info("Starting transform step")
     
-def create_dim_symbol(df: DataFrame) -> DataFrame:
-    return df.select("symbol").dropDuplicates()
-
-TRANSFORM_FUNCTIONS = {
-    "dim_time": create_dim_time,
-    "fact_trades": create_fact_trades,
-    "dim_symbol": create_dim_symbol
-}
+    spark = (
+        SparkSession.builder
+        .appName("TransformStep")
+        .config(
+        "spark.jars.packages",
+        "org.postgresql:postgresql:42.6.0,"
+        "org.apache.hadoop:hadoop-aws:3.3.4,"
+        "com.amazonaws:aws-java-sdk-bundle:1.12.697"
+        )
+        .getOrCreate())
+    # 2.read raw data from parquet
+    try:
+        base_path = os.getenv("BASE_PATH", "/opt/airflow/output")
+        raw_path = f"{base_path}/raw.parquet"
+        df= spark.read.parquet(raw_path)
+    # 3.apply transformations
+        for name, func in TRANSFORM_FORM_DF_FUNCTIONS.items():
+            log.info(f"Running transform {name}")
+            result = func(df)
+    # 4.write transformed data to parquet
+            output_path = f"{base_path}/clean/{name}.parquet"
+            result.write.mode("overwrite").parquet(output_path)
+            log.info(f"Transformed data for {name} saved to {output_path}")
+        
+        for name, func in STATIC_DIMENSIONS.items():
+            output_path = f"{base_path}/clean/{name}.parquet"
+            if os.path.exists(output_path) and not REFRESH_STATIC:
+                log.info(f"Skipping static dimension {name}, file already exists at {output_path}")
+                continue
+            log.info(f"Running static dimension {name}")
+            result = func(spark)
+            result.write.mode("overwrite").parquet(output_path)
+            log.info(f"✅ Saved {name} → {output_path}")
+            
+        log.info("Transform step completed successfully")
+    # 5.handle exceptions
+    except Exception as e:
+        log.error(f"❌ Transform failed: {e}")
+        log.error(traceback.format_exc())
+        sys.exit(1)
+        
+if __name__ == "__main__":
+    run_transform()
