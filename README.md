@@ -1,171 +1,196 @@
-# Binance Real-Time ETL Pipeline
+# 🚀 Binance Real-Time ETL Pipeline – Version 2.0
+
+![ETL Pipeline v2.0](docs/etl_pipeline_v2.png)
 
 ## 📌 Overview
-This project implements an **end-to-end ETL pipeline** for real-time cryptocurrency trades (Binance).  
-The system streams raw trades from the Binance WebSocket API into PostgreSQL, processes them daily with **PySpark**, stores clean data in **Amazon S3**, and loads dimension/fact tables into **Amazon Redshift** for analytics.  
-The pipeline is fully orchestrated with **Apache Airflow**.
+This project implements a **real-time + batch ETL pipeline** for cryptocurrency trades on **Binance**.  
+It streams live trades through WebSocket → stores raw data in **PostgreSQL**,  
+then performs **daily ETL** using **PySpark**, writing partitioned **Parquet files to Amazon S3**,  
+and finally loads curated tables into **Amazon Redshift Serverless** for analytics.  
+
+Everything is fully containerized and orchestrated with **Apache Airflow**.
 
 ---
 
-## 📐 Architecture
-![ETL Pipeline Diagram](etl_pipeline.png)
+## 🧱 Architecture Summary
 
-**Workflow:**
-1. **Ingestion:** Binance WebSocket → PostgreSQL (`trades` table).  
-2. **Extraction:** PySpark reads data via JDBC.  
-3. **Transformation:** Create dimension and fact tables (`dim_time`, `dim_symbol`, `fact_trades`).  
-4. **Load:** Write Parquet to **Amazon S3** and COPY into **Amazon Redshift**.  
-5. **Orchestration:** Daily scheduled ETL with Airflow at 04:00.  
+```mermaid
+flowchart TD
+    A[Binance WebSocket API] -->|Stream live trades| B[(PostgreSQL: raw_trades)]
+    B -->|JDBC Extract| C[PySpark ETL]
+    C -->|Transform & Aggregate| D[(S3 Data Lake: Parquet)]
+    D -->|COPY FROM S3| E[(Redshift Serverless: DWH)]
+    E -->|Query & BI| F[Power BI / QuickSight]
+```
+
+### 🔹 Workflow Steps
+- **Ingest:** Binance WebSocket → PostgreSQL (`trades` table).
+- **Extract:** Spark reads daily snapshot from PostgreSQL via JDBC.
+- **Transform:** Generates tables:
+  - `dim_time`
+  - `dim_symbol` *(only BTCUSDT in this version)*
+  - `dim_exchange`
+  - `dim_currency`
+  - `fact_trades`
+- **Load:** Writes Parquet to S3 and loads into Redshift via `COPY` command.
+- **Orchestration:** Airflow DAG `daily_binance_etl` runs automatically at 04:00 AM.
 
 ---
 
 ## 📂 Project Structure
 ```
-.
+BINANCE_ETL/
 ├── dags/
-│   └── etl_dags.py          # Airflow DAG to orchestrate ETL
+│   └── etl_dags.py
 ├── etl/
-│   ├── extract.py           # Extract trades from PostgreSQL → Spark
-│   ├── transform.py         # Transform into dim_time, dim_symbol, fact_trades
-│   ├── load.py              # Load Parquet to S3 + COPY into Redshift
-│   ├── utils.py             # Helper for JDBC connections
-│   └── main.py              # Main ETL entrypoint
-├── stream.py                # Binance WebSocket → PostgreSQL (real-time ingestion)
-├── requirements.txt         # Python dependencies
-├── Dockerfile               # Container image for Airflow/Spark
-├── docker-compose.yaml      # Local orchestration (Airflow, PostgreSQL, etc.)
-├── airflow.cfg              # Airflow configs
-├── .env                     # Environment variables (AWS, Redshift, Postgres)
+│   ├── extract.py
+│   ├── transform.py
+│   ├── load.py
+│   ├── transform_logic.py
+│   ├── utils.py
+│   └── logger.py
+├── stream.py                       # Binance WebSocket → PostgreSQL
+├── logs/
+│   └── dag_log/
+│       ├── extract_data/                      
+│       ├── transform_data/                    
+│       └── load_data/   
+├── output/
+│   ├── raw/                       # Extracted raw parquet
+│   └── clean/                     # Transformed parquet before load
+├── Dockerfile                    │
+├── docker-compose.yaml           │# Dorker config and airflow
+├── airflow.cfg                   │
+├── requirements.txt               # Python dependencies  
+├── .env.example
+├── docs/
+│   └── etl_pipeline_v2.png
+├── .env
+└── README.md
 ```
 
 ---
 
-## ⚙️ Pipeline Architecture
-```mermaid
-flowchart TD
-    A[Binance WebSocket] -->|Stream| B[(PostgreSQL: trades)]
-    B -->|Extract via JDBC| C[PySpark]
-    C -->|Transform| D[dim_time, dim_symbol, fact_trades]
-    D -->|Write Parquet| E[(Amazon S3: data_clean)]
-    E -->|COPY| F[(Amazon Redshift)]
-    F -->|BI Tools| G[Analytics & Dashboards]
+## ⚙️ Technologies Used
+
+|     Layer     |           Technology           |           Purpose           |
+|---------------|--------------------------------|-----------------------------|
+| Source        | **Binance WebSocket API**      | Stream trade data           |
+| Staging       | **PostgreSQL**                 | Store raw trades            |
+| Processing    | **PySpark 3.5.1**              | Transform & aggregate       |
+| Data Lake     | **Amazon S3**                  | Partitioned Parquet storage |
+| Warehouse     | **Amazon Redshift Serverless** | Analytics-ready DWH         |
+| Orchestration | **Apache Airflow 2.x**         | ETL scheduling & retry      |
+| Infra         | **Docker Compose**             | Local multi-container setup |
+| Logging       | **Custom logger.py**           | Centralized ETL logs        |
+
+---
+
+## 🧮 ETL Logic Summary
+
+### **1️⃣ Extract**
+Reads raw trade data from PostgreSQL (trades table).  
+Writes daily raw snapshot to `/opt/airflow/output/raw/`.
+
+### **2️⃣ Transform**
+Produces five curated tables aligned with Redshift schema:
+
+|      Table       |                     Description                     |
+|------------------|-----------------------------------------------------|
+| **dim_time**     | Time dimension (year, month, day, hour, minute).    |
+| **dim_symbol**   | Trading pair list (`BTCUSDT` only in this version). |
+| **dim_exchange** | Exchange info (`binance`).                          |
+| **dim_currency** | Derived currency IDs (BTC, USDT).                   |
+| **fact_trades**  | Aggregated per-minute trade stats.                  |
+
+### **3️⃣ Load**
+Each table is written to S3 under:  
+`s3://S3_BUCKET/S3_PREFIX/{table}/year=YYYY/month=MM/day=DD/`
+
+Redshift loads Parquet via:
+```sql
+COPY public.fact_trades
+FROM `s3://S3_BUCKET/S3_PREFIX/{table}/year=YYYY/month=MM/day=DD/`'
+IAM_ROLE 'arn:aws:iam::<account>:role/RedshiftS3AccessRole'
+FORMAT AS PARQUET;
 ```
 
 ---
 
-## 🚀 Features
-- **Streaming ingestion** (`stream.py`) from Binance WebSocket into PostgreSQL.
-- **Daily batch ETL** with PySpark:
-  - `dim_time`: timestamp dimension
-  - `dim_symbol`: distinct symbols
-  - `fact_trades`: aggregated trade facts (min, max, avg price, volume, value).
-- **Data Lake** on S3 (partitioned by `year/month/day`).
-- **Data Warehouse** on Redshift with COPY from S3.
-- **Orchestration** using Apache Airflow (DAG scheduled daily at 04:00).
+## 📊 Example Data Preview
+
+### **dim_symbol**
+| symbol_id | symbol  |
+|-----------|---------|
+| 1         | BTCUSDT |
+
+### **fact_trades**
+| symbol | trade_minute         | base_currency_id | quote_currency_id | exchange_id | min_price | max_price | avg_price | total_quantity | total_trade_value |
+|---------|---------------------|------------------|-------------------|-------------|-----------|-----------|-----------|----------------|-------------------|
+| BTCUSDT | 2025-10-20 13:53:00 | BTC              | USDT              | binance     | 111014.48 | 111075    | 111050.80 | 2.18           | 240598.03 |
+| BTCUSDT | 2025-10-20 13:54:00 | BTC              | USDT              | binance     | 111080.07 | 111108.52 | 111087.34 | 13.59          | 1509979.08 |
+| BTCUSDT | 2025-10-20 13:55:00 | BTC              | USDT              | binance     | 111014.39 | 111063.46 | 111029.27 | 7.63           | 848481.80 |
+| BTCUSDT | 2025-10-20 13:56:00 | BTC              | USDT              | binance     | 110986.68 | 111079.40 | 111029.36 | 7.83           | 870095.35 |
+| BTCUSDT | 2025-10-20 13:57:00 | BTC              | USDT              | binance     | 110988.51 | 111049.96 | 111015.38 | 5.56           | 617853.23 |
+
+*(Data from Redshift after successful load, sample for BTCUSDT pair)*
 
 ---
 
-## 🛠️ Installation & Setup
+## 🧾 Logging & Monitoring
+- Structured logging via `logger.py` → `/opt/airflow/logs/`.
+- Each stage (extract, transform, load) writes duration & row count.
+- Airflow retries failed tasks once (`retries = 1`, `delay = 5 min`).
 
-### 1. Clone repository
-```bash
-git clone https://github.com/<your-username>/binance-etl.git
-cd binance-etl
-```
+---
 
-### 2. Create .env file (based on .env.simple)
-```bash
-cp .env.example .env
-```
+## 🧰 How to Run
 
-### 3. Build & start services
+### 1️⃣ Start services
 ```bash
 docker-compose up -d --build
 ```
 
-- Airflow UI → [http://localhost:8080](http://localhost:8080)  
-- PostgreSQL → `localhost:5432`  
+### 2️⃣ Access UIs
+- Airflow → http://localhost:8081  
+- pgAdmin → http://localhost:8080  
 
----
-
-## 📊 Demo Results
-
-After a daily run, transformed tables are written:
-
-✅ **S3 (Parquet):**
-```
-s3://binance81/data_clean/dim_time/year=2025/month=09/day=10/
-s3://binance81/data_clean/dim_symbol/year=2025/month=09/day=10/
-s3://binance81/data_clean/fact_trades/year=2025/month=09/day=10/
+### 3️⃣ Trigger DAG
+```bash
+docker exec -it binance-scheduler airflow dags trigger daily_binance_etl
 ```
 
-✅ **Redshift Tables:**
-```sql
-SELECT COUNT(*) FROM public.fact_trades;   -- Fact table
-SELECT * FROM public.dim_symbol LIMIT 5;   -- Dimension table
+### 4️⃣ Check Logs
+```bash
+docker logs -f binance-scheduler
 ```
 
 ---
 
-## 🧾 Example Output
+## ✅ Version 2.0 Highlights
 
-### 1. `dim_time`
-| datetime            | year | month | day | hour | minute |
-|---------------------|------|-------|-----|------|--------|
-| 2025-09-10 04:00:00 | 2025 | 9     | 10  | 4    | 0      |
-| 2025-09-10 04:01:00 | 2025 | 9     | 10  | 4    | 1      |
-
----
-
-### 2. `dim_symbol`
-| symbol |
-|--------|
-| BTCUSDT|
-| ETHUSDT|
+|      Feature      |          Status           |                  Notes                 |
+|-------------------|---------------------------|----------------------------------------|
+| ETL Flow          | Working end-to-end        | Extract → Transform → Load to Redshift |
+| Fact Data         | Realistic BTCUSDT trades  | Includes base/quote/exchange IDs       | 
+| Dim Tables        | Updated 5 dimensions      | Schema aligned with Redshift           |
+| Logging           | Structured logger         | Stored in `/opt/airflow/logs`          |
+| Airflow           | Scheduled daily           | DAG `daily_binance_etl`                |
+| Schema Alignment  | Fixed column order & type | Prevented Spectrum Scan errors         |
 
 ---
 
-### 3. `fact_trades`
-| symbol  | trade_minute       | min_price | max_price | avg_price | total_quantity | total_trade_value |
-|---------|--------------------|-----------|-----------|-----------|----------------|-------------------|
-| BTCUSDT | 2025-09-10 04:00:00| 57000.10  | 57005.50  | 57002.80  | 1.52           | 86763.21          |
-| BTCUSDT | 2025-09-10 04:01:00| 57006.00  | 57020.75  | 57012.90  | 0.85           | 48460.96          |
-| ETHUSDT | 2025-09-10 04:00:00| 2200.30   | 2205.70   | 2203.25   | 12.50          | 27540.62          |
+## 🧭 Next Steps
+- Add multiple trading pairs (ETHUSDT, SOLUSDT…).  
+- Introduce data validation and quality checks.  
+- Automate daily dashboard refresh in Power BI.  
+- Deploy pipeline to AWS ECS or Glue.  
+- Add CI/CD workflow for Docker build & DAG sync.
 
 ---
 
-## 📦 Dependencies
-See [`requirements.txt`](requirements.txt):
-- PySpark 3.5.1
-- pandas, pyarrow
-- psycopg2-binary
-- boto3 / botocore
-- apache-airflow-providers-{amazon,spark}
-
----
-
-## 📅 Airflow DAG
-- DAG ID: **daily_binance_etl**
-- Schedule: `0 4 * * *` (04:00 daily)
-- Task: `run_etl_pipeline`
-
----
-
-## 📈 Future Improvements
-- Multi-symbol streaming (BTC, ETH, …).
-- Near-real-time micro-batch Spark Structured Streaming.
-- Data quality checks before Redshift load.
-- Dashboard integration with Amazon QuickSight or Power BI.
-
-
-
-
-python - <<'EOF'
-import socket
-try:
-    host = "binance.714319916261.ap-southeast-2.redshift-serverless.amazonaws.com"
-    print("Resolving host:", host)
-    print("Result:", socket.gethostbyname(host))
-except Exception as e:
-    print("❌ DNS lookup failed:", e)
-EOF
+## ✍️ Author
+**Nguyễn Ngọc Đức**  
+_Data Engineer | Binance ETL Pipeline v2.0_  
+📧 ducdataengineer@gmail.com  
+🌐 [github.com/etl-project-simple](https://github.com/etl-project-simple)
